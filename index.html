@@ -30,7 +30,7 @@
       justify-content: space-between;
       align-items: center;
       font-size: 12px;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
 
     .title {
@@ -73,6 +73,35 @@
       100% { transform: scale(1) rotate(0deg);   text-shadow: 0 0 6px #facc15; }
     }
 
+    /* 태그 필터 */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 6px;
+      font-size: 11px;
+      color: #9ca3af;
+      margin-bottom: 8px;
+    }
+
+    .filter-label {
+      white-space: nowrap;
+    }
+
+    .filter-select {
+      font-size: 11px;
+      font-family: inherit;
+      padding: 2px 6px;
+      background: #000;
+      color: #e5e7eb;
+      border: 1px solid #4b5563;
+    }
+
+    .filter-select:focus {
+      outline: none;
+      border-color: #facc15;
+    }
+
     /* 메인 레이아웃 */
     .layout {
       display: grid;
@@ -93,7 +122,28 @@
     .card-title {
       font-size: 12px;
       color: #9ca3af;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
+    }
+
+    .repeat-banner {
+      font-size: 11px;
+      color: #fb7185;
+      margin-bottom: 4px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .repeat-banner.show {
+      opacity: 1;
+      animation: repeat-blink 0.9s ease-in-out 2;
+    }
+
+    @keyframes repeat-blink {
+      0%   { opacity: 0; }
+      25%  { opacity: 1; }
+      50%  { opacity: 0.4; }
+      75%  { opacity: 1; }
+      100% { opacity: 0.8; }
     }
 
     .question-text {
@@ -344,6 +394,16 @@
       }
     }
 
+    /* 컷씬 느낌 전환 */
+    #card-main.scene-transition {
+      animation: scene-in 0.35s ease;
+    }
+
+    @keyframes scene-in {
+      0%   { opacity: 0; transform: translateY(10px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+
     @media (max-width: 720px) {
       .layout {
         grid-template-columns: 1fr;
@@ -370,10 +430,20 @@
       </div>
     </div>
 
+    <!-- 태그 필터 -->
+    <div class="filter-bar">
+      <span class="filter-label">태그 필터:</span>
+      <select id="tag-filter-select" class="filter-select">
+        <option value="ALL">전체 태그</option>
+        <!-- JS에서 자동으로 채움 -->
+      </select>
+    </div>
+
     <div class="layout">
       <!-- 왼쪽: 문제 박스 -->
       <div class="card" id="card-main">
         <div class="card-title" id="q-id">문제 -</div>
+        <div class="repeat-banner" id="repeat-banner">⚠ 이전에 틀렸던 문제가 재등장했습니다.</div>
         <div class="tag" id="q-tag"></div>
         <div class="question-text" id="q-text"></div>
         <div class="choices" id="choices"></div>
@@ -382,7 +452,6 @@
           <span id="tip">TIP: 해부생리 흐름 위주로 보자.</span>
           <div>
             <button class="btn-small" id="btn-submit">제출</button>
-            <button class="btn-small disabled" id="btn-next" disabled>다음 문제 ▶</button>
           </div>
         </div>
       </div>
@@ -403,7 +472,7 @@
     </div>
   </div>
 
-  <!-- 해설 팝업 모달 -->
+  <!-- 해설 / 완료 팝업 모달 -->
   <div class="modal-overlay" id="modal-overlay">
     <div class="modal">
       <div class="modal-title" id="modal-title">해설</div>
