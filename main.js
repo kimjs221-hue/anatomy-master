@@ -13,7 +13,6 @@ const state = {
   currentChoiceOrder: [],  // 화면 보기 → 원본 인덱스 매핑
   selectedDisplayIdx: null,
   answered: false,         // 이 문제에서 이미 평가했는지
-  solvedCurrent: false,    // 이 문제를 정답으로 맞췄는지
   queue: [],               // 랜덤 출제용 인덱스 큐
   wrongMap: new Map(),     // id -> { index, count }
 
@@ -22,6 +21,8 @@ const state = {
   seenQuestions: new Set(),  // 한 번이라도 풀어본 문제 index
   finishedNotified: false,   // 이번 라운드에서 완료 모달을 이미 띄웠는지
   lastAnsweredIndex: null,   // 직전에 푼 문제 index (다음 문제에서 바로 안 나오게)
+
+  activeTag: "ALL",          // 현재 선택된 태그 필터
 };
 
 const WRONG_REAPPEAR_PROB = 0.4; // 틀린 문제 재출제 확률
@@ -36,15 +37,32 @@ function shuffleArray(arr) {
   return a;
 }
 
+// 현재 태그 필터에 index가 포함되는지 여부
+function matchesActiveTag(index) {
+  if (state.activeTag === "ALL") return true;
+  const q = QUESTIONS_DATA[index];
+  if (!q) return false;
+  return (q.tag || "") === state.activeTag;
+}
+
 function buildQueue(withoutIndex = null) {
-  let indices = QUESTIONS_DATA.map((_, i) => i);
+  let indices = QUESTIONS_DATA
+    .map((_, i) => i)
+    .filter((i) => matchesActiveTag(i));
+
+  // 직전에 푼 문제 제외 시도
   if (withoutIndex !== null && QUESTIONS_DATA.length > 1) {
-    indices = indices.filter((i) => i !== withoutIndex);
+    const filtered = indices.filter((i) => i !== withoutIndex);
+    if (filtered.length > 0) {
+      indices = filtered;
+    }
+    // 만약 필터 후 아무 것도 없으면, 어쩔 수 없이 withoutIndex 포함 (1문항 태그 등)
   }
+
   state.queue = shuffleArray(indices);
 }
 
-// ---------- UI 업데이트 ----------
+// ---------- UI ----------
 function updateStats() {
   $("#stat-total-questions").textContent = QUESTIONS_DATA.length;
   $("#stat-count").textContent = state.attempts;
@@ -110,6 +128,56 @@ function renderWrongList() {
   }
 }
 
+// 태그 필터 UI 초기화
+function buildTagFilterUI() {
+  const select = $("#tag-filter-select");
+  if (!select) return;
+
+  const tags = new Set();
+  QUESTIONS_DATA.forEach((q) => {
+    if (q.tag) tags.add(q.tag);
+  });
+
+  // 기존 옵션 날리고 다시
+  select.innerHTML = "";
+  const optAll = document.createElement("option");
+  optAll.value = "ALL";
+  optAll.textContent = "전체 태그";
+  select.appendChild(optAll);
+
+  Array.from(tags)
+    .sort()
+    .forEach((tag) => {
+      const o = document.createElement("option");
+      o.value = tag;
+      o.textContent = tag;
+      select.appendChild(o);
+    });
+
+  select.value = state.activeTag;
+
+  select.addEventListener("change", () => {
+    state.activeTag = select.value;
+    state.lastAnsweredIndex = null;
+    // 현재 태그에 해당하는 문제가 없으면 안내
+    const anyMatch = QUESTIONS_DATA.some((_, i) => matchesActiveTag(i));
+    if (!anyMatch) {
+      state.queue = [];
+      state.currentIndex = null;
+      // 화면에 안내 문구 출력
+      $("#q-id").textContent = "문제 없음";
+      $("#q-tag").textContent = "";
+      $("#q-text").textContent = "선택한 태그에 해당하는 문제가 없습니다.";
+      $("#choices").innerHTML = "";
+      $("#feedback-inline").textContent = "";
+      $("#repeat-banner").classList.remove("show");
+      return;
+    }
+    buildQueue();
+    renderQuestion();
+  });
+}
+
 // ---------- 모달 ----------
 function showModal({ title, type, sections }) {
   const overlay = $("#modal-overlay");
@@ -154,21 +222,7 @@ function showModal({ title, type, sections }) {
 function hideModal() {
   const overlay = $("#modal-overlay");
   overlay.style.display = "none";
-
-  if (state.modalContext === "answer") {
-    // 오답이면: 닫자마자 자동으로 다음 문제
-    if (state.lastResultCorrect === false) {
-      state.modalContext = "none";
-      renderQuestion();
-      return;
-    }
-    // 정답이면: 사용자가 [다음 문제] 버튼으로 진행
-    state.modalContext = "none";
-  } else if (state.modalContext === "finish") {
-    state.modalContext = "none";
-  } else {
-    state.modalContext = "none";
-  }
+  state.modalContext = "none";
 }
 
 // 오답노트에서 해설만 보는 경우
@@ -216,9 +270,19 @@ function showExplanationFromWrong(index) {
     type: "",
     sections,
   });
+
+  const footer = document.querySelector(".modal-footer");
+  footer.innerHTML = "";
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "modal-close";
+  closeBtn.textContent = "닫기";
+  closeBtn.addEventListener("click", () => {
+    hideModal();
+  });
+  footer.appendChild(closeBtn);
 }
 
-// 모든 문항을 한 번씩 풀었고, 오답노트도 비었을 때
+// 라운드 완료
 function showFinishModal() {
   state.modalContext = "finish";
   const sections = [
@@ -238,7 +302,6 @@ function showFinishModal() {
     sections,
   });
 
-  // 모달에 '재도전 하기' 버튼 추가
   const footer = document.querySelector(".modal-footer");
   footer.innerHTML = "";
 
@@ -246,10 +309,11 @@ function showFinishModal() {
   retryBtn.className = "modal-close";
   retryBtn.textContent = "재도전 하기";
   retryBtn.addEventListener("click", () => {
-    // 라운드 리셋: 기록 초기화 후 새 라운드 시작
     state.seenQuestions.clear();
     state.finishedNotified = false;
     state.lastAnsweredIndex = null;
+    state.combo = 0;
+    updateCombo(false);
     buildQueue();
     hideModal();
     renderQuestion();
@@ -267,15 +331,15 @@ function showFinishModal() {
   footer.appendChild(closeBtn);
 }
 
-// ---------- 문제 선택 로직 ----------
+// ---------- 문제 선택 ----------
 function pickNextQuestionIndex() {
   const avoid = state.lastAnsweredIndex;
 
-  // 1) 오답에서 뽑을 후보 (직전에 푼 문제는 제외)
+  // 1) 오답 후보 (현재 태그 안에서만, 직전 문제 제외)
   const wrongIds = Array.from(state.wrongMap.keys());
   const wrongIndicesAll = wrongIds.map((id) => state.wrongMap.get(id).index);
   const wrongCandidates = wrongIndicesAll.filter(
-    (idx) => idx !== avoid
+    (idx) => idx !== avoid && matchesActiveTag(idx)
   );
 
   if (wrongCandidates.length > 0 && Math.random() < WRONG_REAPPEAR_PROB) {
@@ -283,17 +347,20 @@ function pickNextQuestionIndex() {
     return idx;
   }
 
-  // 2) 일반 큐
+  // 2) 일반 큐 (현재 태그 안에서만)
   if (state.queue.length === 0) {
-    // 큐를 만들 때도 방금 푼 문제(avoid)를 한 번 제외해주는 옵션
     buildQueue(avoid);
   }
 
-  // 큐에서 하나 뽑되, 가능하면 직전 문제는 피하기
+  if (state.queue.length === 0) {
+    // 현재 태그에 해당하는 문제가 아예 없는 경우
+    return null;
+  }
+
   let idx = state.queue.shift();
   if (idx === avoid && QUESTIONS_DATA.length > 1 && state.queue.length > 0) {
     const alt = state.queue.shift();
-    state.queue.push(idx); // 나중에 다시 등장 가능
+    state.queue.push(idx);
     idx = alt;
   }
 
@@ -302,26 +369,40 @@ function pickNextQuestionIndex() {
 
 // ---------- 문제 렌더링 ----------
 function renderQuestion() {
+  const card = $("#card-main");
+  const banner = $("#repeat-banner");
+
   if (!QUESTIONS_DATA.length) {
     $("#q-id").textContent = "문제 없음";
     $("#q-tag").textContent = "";
     $("#q-text").textContent = "QUESTIONS 배열에 문제를 추가해주세요.";
     $("#choices").innerHTML = "";
     $("#feedback-inline").textContent = "";
+    banner.classList.remove("show");
     return;
   }
 
+  const idx = pickNextQuestionIndex();
+
+  if (idx === null || idx === undefined || !QUESTIONS_DATA[idx]) {
+    $("#q-id").textContent = "문제 없음";
+    $("#q-tag").textContent = "";
+    $("#q-text").textContent = "선택한 태그에 해당하는 문제가 없습니다.";
+    $("#choices").innerHTML = "";
+    $("#feedback-inline").textContent = "";
+    banner.classList.remove("show");
+    return;
+  }
+
+  state.currentIndex = idx;
   state.answered = false;
-  state.solvedCurrent = false;
   state.selectedDisplayIdx = null;
   state.lastResultCorrect = null;
 
-  const nextBtn = $("#btn-next");
-  nextBtn.disabled = true;
-  nextBtn.classList.add("disabled");
-
-  const idx = pickNextQuestionIndex();
-  state.currentIndex = idx;
+  // 컷씬 느낌 전환
+  card.classList.remove("scene-transition");
+  void card.offsetWidth;
+  card.classList.add("scene-transition");
 
   const q = QUESTIONS_DATA[idx];
 
@@ -329,6 +410,13 @@ function renderQuestion() {
   $("#q-tag").textContent = q.tag ? `[${q.tag}]` : "";
   $("#q-text").textContent = q.prompt || "";
   $("#feedback-inline").textContent = "";
+
+  // 재등장 오답 문제 경고등
+  if (q.id && state.wrongMap.has(q.id)) {
+    banner.classList.add("show");
+  } else {
+    banner.classList.remove("show");
+  }
 
   const choicesBox = $("#choices");
   choicesBox.innerHTML = "";
@@ -354,9 +442,9 @@ function renderQuestion() {
     "TIP: '가장 먼저 / 다음으로 / 직접적인 기전' 같은 단어에 주의해 봐.";
 }
 
-// 보기 선택만 담당
+// 보기 선택
 function selectChoice(displayIdx) {
-  if (state.solvedCurrent) return; // 정답 맞춘 후에는 고정
+  if (state.answered) return;
   state.selectedDisplayIdx = displayIdx;
   document.querySelectorAll(".choice-btn").forEach((btn, i) => {
     btn.classList.toggle("selected", i === displayIdx);
@@ -370,7 +458,7 @@ function submitCurrent() {
     $("#feedback-inline").textContent = "먼저 보기를 선택하고 '제출'을 눌러줘.";
     return;
   }
-  if (state.answered) return; // 한 문제에 한 번만 평가
+  if (state.answered) return;
   evaluateChoice(state.selectedDisplayIdx);
 }
 
@@ -421,6 +509,8 @@ function evaluateChoice(displayIdx) {
   const chosenLetter = String.fromCharCode(65 + displayIdx);
   const correctLetter = String.fromCharCode(65 + correctDisplayIdx);
 
+  let sections;
+
   if (isCorrect) {
     state.correct += 1;
     state.combo += 1;
@@ -435,7 +525,7 @@ function evaluateChoice(displayIdx) {
       card.classList.remove("correct-flash");
     }, 500);
 
-    const sections = [
+    sections = [
       {
         heading: `내가 고른 보기 (${chosenLetter})`,
         text: chosenChoice.text || "",
@@ -443,29 +533,12 @@ function evaluateChoice(displayIdx) {
       },
     ];
 
-    state.modalContext = "answer";
-    showModal({
-      title: "✔ 정답!",
-      type: "correct",
-      sections,
-    });
-
-    // 정답 맞춘 상태 → 다음 문제 버튼 활성화
-    state.solvedCurrent = true;
-    const nextBtn = $("#btn-next");
-    nextBtn.disabled = false;
-    nextBtn.classList.remove("disabled");
-
     // 오답노트에서 제거
     if (q.id && state.wrongMap.has(q.id)) {
       state.wrongMap.delete(q.id);
       renderWrongList();
     }
-
-    // 모든 보기 비활성화
-    buttons.forEach((btn) => (btn.disabled = true));
   } else {
-    // 오답
     state.combo = 0;
     updateCombo(false);
 
@@ -477,7 +550,7 @@ function evaluateChoice(displayIdx) {
       card.classList.remove("shake");
     }, 400);
 
-    const sections = [
+    sections = [
       {
         heading: `내가 고른 보기 (${chosenLetter})`,
         text: chosenChoice.text || "",
@@ -490,13 +563,6 @@ function evaluateChoice(displayIdx) {
       },
     ];
 
-    state.modalContext = "answer";
-    showModal({
-      title: "✖ 오답",
-      type: "wrong",
-      sections,
-    });
-
     // 오답노트 기록
     if (q.id) {
       const prev = state.wrongMap.get(q.id);
@@ -508,15 +574,33 @@ function evaluateChoice(displayIdx) {
       }
       renderWrongList();
     }
-
-    buttons.forEach((btn) => (btn.disabled = true));
   }
 
   updateStats();
 
-  // ✅ "모든 문제를 다 풀었습니다!" 조건:
-  // 1) 모든 문제를 최소 한 번씩 풀었고
-  // 2) 오답노트가 비어 있을 때만
+  // 해설 모달: 정답/오답 모두 "다음 문제 풀기"
+  state.modalContext = "answer";
+  showModal({
+    title: isCorrect ? "✔ 정답!" : "✖ 오답",
+    type: isCorrect ? "correct" : "wrong",
+    sections,
+  });
+
+  const footer = document.querySelector(".modal-footer");
+  footer.innerHTML = "";
+  const nextBtn = document.createElement("button");
+  nextBtn.className = "modal-close";
+  nextBtn.textContent = "다음 문제 풀기";
+  nextBtn.addEventListener("click", () => {
+    hideModal();
+    renderQuestion();
+  });
+  footer.appendChild(nextBtn);
+
+  // 보기 비활성화
+  buttons.forEach((btn) => (btn.disabled = true));
+
+  // 전체 기준 클리어 조건
   if (
     !state.finishedNotified &&
     state.seenQuestions.size === QUESTIONS_DATA.length &&
@@ -533,6 +617,7 @@ function init() {
     console.warn("QUESTIONS가 비어 있습니다. questions.js를 확인하세요.");
   }
 
+  buildTagFilterUI();
   buildQueue();
   updateStats();
   updateCombo(false);
@@ -540,19 +625,27 @@ function init() {
   renderQuestion();
 
   $("#btn-submit").addEventListener("click", submitCurrent);
-  $("#btn-next").addEventListener("click", () => {
-    if (!state.solvedCurrent) return; // 정답 맞춘 경우에만
-    renderQuestion();
-  });
 
   $("#btn-clear-wrong").addEventListener("click", () => {
     state.wrongMap.clear();
     renderWrongList();
   });
 
-  $("#modal-close").addEventListener("click", hideModal);
+  const defaultClose = $("#modal-close");
+  if (defaultClose) {
+    defaultClose.addEventListener("click", () => {
+      hideModal();
+    });
+  }
+
   $("#modal-overlay").addEventListener("click", (e) => {
-    if (e.target.id === "modal-overlay") hideModal();
+    if (e.target.id !== "modal-overlay") return;
+    if (state.modalContext === "answer") {
+      hideModal();
+      renderQuestion();
+    } else {
+      hideModal();
+    }
   });
 }
 
