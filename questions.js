@@ -1688,7 +1688,7 @@ window.QUESTIONS = [
     ],
     "correctIndex": 1
   },
-  {
+{
     id: "NEURO_01",
     tag: "신경계-대뇌겉질",
     prompt: "브로드만 영역에 대한 설명으로 옳은 것은?",
@@ -2366,4 +2366,3 @@ window.QUESTIONS = [
 if (typeof window !== "undefined") {
   window.QUESTIONS = QUESTIONS;
 }
-
